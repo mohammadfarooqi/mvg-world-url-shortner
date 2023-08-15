@@ -1,0 +1,158 @@
+requirements
+
+what is the length of the url
+- 6 char
+
+can use digits, upper/lower case letters .. CASE IN-SENSITIVE
+
+user submitted codes need to be min 4 char long
+
+need to be scalability, reliability, and testability
+
+short to long
+
+custom short code to long
+
+provide basic analytics /:short/stats
+- long url
+- created at
+- num of clicks
+
+-----
+
+char set
+a-z (26), 0-9 (10) -> 36
+
+36 ** 6 = 2,176,782,336 ~ 2.17 billion (unique urls supported)
+
+NOTE: THE REQUIREMENT IS TO GENERATE EXACTLY 6 CHARS SHORT CODE.
+THEREFORE WE NEED TO START COUNTER AT 60,466,176. SO THE available
+UNIQUE URLS WE CAN HAVE IS 2,176,782,336 - 60466176 = 2,116,316,160 (unique urls supported)
+
+1 * 36^5 + 0 * 36^4 + 0 * 36^3 + 0 * 36^2 + 0 * 36^1 + 0 * 36^0 = 60466176
+
+
+----
+
+what is the volumne of traffic
+
+(twitter ~= 300 mil users/month
+10% of that
+30M/month ~= 1 mil users a day -> we may get)
+
+x * 60 (sec) * 60 (min) * 24 (hours) * 365 (days)  = 2,116,316,160
+x = 67.1079452055 req / sec
+
+------
+
+assuming 50:1 read:write ratio
+
+67 req/s (url generated) * 50 (reads) = 3,350 req/s (redirects)
+
+3350 * (60*60*24) = 289,440,000 req/day
+
+with the 80:20 rule for caching,
+
+.2 * 289,440,000 * 2.02 kb = 116,933,760 kb ~ 116.93376 gb of cache required
+- note. we can do least recently used strategy for expiring/cleanup cache
+
+------
+
+data size - URLMappings
+
+long url -> 2kb (2048 chars - GET REQ MAX LENGTH ALLOWED)
+short url -> 6 bytes (6 chars)
+created at -> 8 bytes
+last accessed -> 8 bytes
+--- total -> 2.02 kb approx
+
+2.02 kb * 1000000 (1 mill users a day) = 2,020,000 kb ~= 2.02 gb / day
+
+-------
+
+function to use number to hash generation
+
+function base36_encode(number) {
+  const s = '0123456789abcdefghijklmnopqrstuvwxyz';
+  let hash_str = '';
+  while (number > 0) {
+    hash_str = s[number % 36] + hash_str;
+    number = Math.floor(number / 36);
+  }
+  return hash_str;
+}
+
+--------
+
+what database to use? rdbms or nosql?
+
+in this case for our service that would be responbsible for token assignments, we can use postgres
+- the reason we can use postgres here is that we are not worried too much here about that high writes/reads.
+  the number of requests that come through would be every so often as once the node is done then it would request next set range
+- also the data is just storing the ranges and marking htem as used/assigned once a node requests a new range
+
+for custom url mapping we should use relational, so postgres is a good option
+- reason for that is 2
+  1. we need acid, to ensure there are no collisions and data doesnt get curropt
+  2. we are making an assumption that the amount of custom url requests we get to store would be a lot less than the random short url
+
+for our short to long long to short, we can use no sql.
+- nosql is highly available and scalable
+- one downside to nosql is that it "Eventually" makes data consistent, which is ok in our case, as
+  our tokens are unique, therefroe eventually making that data into db is ok. there would be no collisions,
+  we have a solid token service that will handle this
+
+--------
+
+rough estimates
+
+shorterned urls generated: 67 req / s
+shorterned urls generated in 1 year capacity: 2,116,316,160 ~ 2.11 billion
+total redirects: 3350 req/s
+cache memory: 116 gb
+
+
+--------
+
+Schema Structure
+
+Postgres
+- TokenAssignments
+  - id
+  - start_range
+  - end_range
+  - available
+- CustomURLMappings
+  - id
+  - custom_shortcode
+  - url
+  - created_at
+  - last_accessed_at
+  - user_id
+
+NoSQL
+- URLMappings
+  - shortcode
+  - url
+  - created_at
+  - last_accessed_at
+  - user_id
+- Users
+  - id
+  - name
+  - email
+  - created_at
+
+-----------
+
+infrastructure
+- databases would have replics
+- infra would deployed on multiple availability zones
+- auto scaling for nodes would be utilized
+- load balancers would be utilized
+  - initially we can use round robin to keep things simple
+    but given time, we can based load spliting upon cpu usage or load
+- one thing to note about analytics is that when someone request short to long
+  we will make produce a kafka msg async to the request, this would lead to possible
+  failures from time to time (moving data to kafka) but the analytics atm is on best
+  efforts case. this is to reduce latency from short -> long
